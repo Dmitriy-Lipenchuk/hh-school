@@ -23,7 +23,7 @@ import static java.util.stream.Collectors.toMap;
 
 public class Launcher {
 
-  public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
+  public static void main(String[] args) throws IOException, InterruptedException {
     // Написать код, который, как можно более параллельно:
     // - по заданному пути найдет все "*.java" файлы
     // - для каждого файла вычислит 10 самых популярных слов (см. #naiveCount())
