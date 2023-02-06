@@ -22,8 +22,9 @@ import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toMap;
 
 public class Launcher {
+  private static final HashMap<String, Long> searchCache = new HashMap<>();
 
-  public static void main(String[] args) throws IOException, InterruptedException {
+  public static void main(String[] args) throws IOException {
     // Написать код, который, как можно более параллельно:
     // - по заданному пути найдет все "*.java" файлы
     // - для каждого файла вычислит 10 самых популярных слов (см. #naiveCount())
@@ -46,27 +47,28 @@ public class Launcher {
     testCount();
   }
 
-  private static void testCount() throws IOException, InterruptedException {
+  private static void testCount() throws IOException {
     Path path = Path.of(System.getProperty("user.dir"), "\\parallelism\\src\\main\\java\\ru\\hh\\school\\parallelism\\");
-    ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-    List<Path> directories = Files.list(path)
+    ExecutorService fileExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    ExecutorService searchExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    List<Path> directories = Files.walk(path)
             .filter(Files::isDirectory)
             .toList();
 
     for (Path directory : directories) {
-      CompletableFuture.supplyAsync(() -> getTopTenWordsInDirectory(directory), executor)
+      CompletableFuture.supplyAsync(() -> getTopTenWordsInDirectory(directory), fileExecutor)
               .thenAccept(map -> {
                 Set<String> words = map.keySet();
                 for (String word : words) {
-                  CompletableFuture.supplyAsync(() -> naiveSearch(word), executor)
+                  CompletableFuture.supplyAsync(() -> naiveSearch(word), searchExecutor)
                           .thenAccept(searchResult ->
                                   System.out.printf("%-100s | %-20s | %-10s\n", directory, word, searchResult));
                 }
               });
     }
 
-    executor.awaitTermination(1, TimeUnit.SECONDS);
-    executor.shutdown();
+    shutdownAndAwaitTermination(fileExecutor);
+    shutdownAndAwaitTermination(searchExecutor);
   }
 
   private static Map<String, Long> getTopTenWordsInDirectory(Path directoryPath) {
@@ -104,6 +106,10 @@ public class Launcher {
   }
 
   private static long naiveSearch(String query) {
+    if (searchCache.containsKey(query)) {
+      return searchCache.get(query);
+    }
+
     Document document = null;
     try {
       document = Jsoup //
@@ -114,9 +120,26 @@ public class Launcher {
       throw new RuntimeException(e);
     }
 
-    Element divResultStats = document.select("div#result-stats").first();
+    Element divResultStats = document.select("div#result-stats").first(); // при slim_appbar крашится при query = "annotations"
     String text = divResultStats.text();
     String resultsPart = text.substring(0, text.indexOf('('));
-    return Long.parseLong(resultsPart.replaceAll("[^0-9]", ""));
+
+    long result = Long.parseLong(resultsPart.replaceAll("[^0-9]", ""));
+
+    searchCache.put(query, result);
+
+    return result;
+  }
+
+  private static void shutdownAndAwaitTermination(ExecutorService pool) {
+    pool.shutdown();
+    try {
+      if (!pool.awaitTermination(60, TimeUnit.SECONDS)) {
+        pool.shutdownNow();
+      }
+    } catch (InterruptedException ie) {
+      pool.shutdownNow();
+      Thread.currentThread().interrupt();
+    }
   }
 }
