@@ -22,7 +22,7 @@ import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toMap;
 
 public class Launcher {
-  private static final HashMap<String, Long> searchCache = new HashMap<>();
+  private static final Map<String, Long> searchCache = new ConcurrentHashMap<>();
 
   public static void main(String[] args) throws IOException {
     // Написать код, который, как можно более параллельно:
