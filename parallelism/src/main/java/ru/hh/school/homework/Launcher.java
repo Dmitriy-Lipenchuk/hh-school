@@ -48,7 +48,7 @@ public class Launcher {
     Path path = Path.of(System.getProperty("user.dir"), "\\parallelism\\src\\main\\java\\ru\\hh\\school\\parallelism\\");
 
     List<CompletableFuture<Void>> fileFutures = new ArrayList<>();
-    List<CompletableFuture<Void>> searchFutures = new ArrayList<>();
+    List<CompletableFuture<Void>> searchFutures = Collections.synchronizedList(new ArrayList<>());
 
     ExecutorService fileExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     ExecutorService searchExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
@@ -139,7 +139,14 @@ public class Launcher {
 
   private static void shutdownAndAwaitTermination(ExecutorService pool, List<CompletableFuture<Void>> futures) {
     pool.shutdown();
-    CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).join();
+
+    try {
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).get(60, TimeUnit.SECONDS);
+    } catch (InterruptedException | ExecutionException | TimeoutException ignored) {
+      pool.shutdownNow();
+      return;
+    }
+
     pool.shutdownNow();
   }
 }
