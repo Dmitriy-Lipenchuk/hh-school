@@ -142,7 +142,11 @@ public class Launcher {
 
     try {
       CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).get(60, TimeUnit.SECONDS);
-    } catch (InterruptedException | ExecutionException | TimeoutException ignored) {
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      pool.shutdownNow();
+      return;
+    } catch (ExecutionException | TimeoutException e) {
       pool.shutdownNow();
       return;
     }
