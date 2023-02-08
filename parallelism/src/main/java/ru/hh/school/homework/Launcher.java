@@ -3,11 +3,14 @@ package ru.hh.school.homework;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.stream.Stream;
+
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+
 import static java.util.Collections.reverseOrder;
 import static java.util.Map.Entry.comparingByValue;
 import static java.util.function.Function.identity;
@@ -16,6 +19,7 @@ import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toMap;
 
 public class Launcher {
+  private static final Map<String, Long> searchCache = new ConcurrentHashMap<>();
 
   public static void main(String[] args) throws IOException {
     // Написать код, который, как можно более параллельно:
@@ -37,47 +41,116 @@ public class Launcher {
     // Порядок результатов в консоли не обязательный.
     // При желании naiveSearch и naiveCount можно оптимизировать.
 
-    // test our naive methods:
     testCount();
-    testSearch();
   }
 
-  private static void testCount() {
-    Path path = Path.of("d:\\projects\\work\\hh-school\\parallelism\\src\\main\\java\\ru\\hh\\school\\parallelism\\Runner.java");
-    System.out.println(naiveCount(path));
-  }
+  private static void testCount() throws IOException {
+    Path path = Path.of(System.getProperty("user.dir"), "\\parallelism\\src\\main\\java\\ru\\hh\\school\\parallelism\\");
 
-  private static Map<String, Long> naiveCount(Path path) {
-    try {
-      return Files.lines(path)
-        .flatMap(line -> Stream.of(line.split("[^a-zA-Z0-9]")))
-        .filter(word -> word.length() > 3)
-        .collect(groupingBy(identity(), counting()))
-        .entrySet()
-        .stream()
-        .sorted(comparingByValue(reverseOrder()))
-        .limit(10)
-        .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+    List<CompletableFuture<Void>> fileFutures = new ArrayList<>();
+    List<CompletableFuture<Void>> searchFutures = Collections.synchronizedList(new ArrayList<>());
+
+    ExecutorService fileExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    ExecutorService searchExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    List<Path> directories = Files.walk(path)
+            .filter(Files::isDirectory)
+            .toList();
+
+    for (Path directory : directories) {
+      CompletableFuture<Void> directoryFuture = CompletableFuture.supplyAsync(() -> getTopTenWordsInDirectory(directory), fileExecutor)
+              .thenAccept(map -> {
+                Set<String> words = map.keySet();
+                for (String word : words) {
+                  CompletableFuture<Void> searchFuture = CompletableFuture.supplyAsync(() -> naiveSearch(word), searchExecutor)
+                          .thenAccept(searchResult ->
+                                  System.out.printf("%-100s | %-20s | %-10s\n", directory, word, searchResult));
+
+                  searchFutures.add(searchFuture);
+                }
+              });
+
+      fileFutures.add(directoryFuture);
     }
-    catch (IOException e) {
+
+    shutdownAndAwaitTermination(fileExecutor, fileFutures);
+    shutdownAndAwaitTermination(searchExecutor, searchFutures);
+  }
+
+  private static Map<String, Long> getTopTenWordsInDirectory(Path directoryPath) {
+    final Map<String, Long> wordsFrequency = new HashMap<>();
+
+    try {
+      Files.list(directoryPath)
+              .filter(Files::isRegularFile)
+              .forEach(file -> fillMap(file, wordsFrequency));
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+
+    return wordsFrequency.entrySet()
+            .stream()
+            .sorted(comparingByValue(reverseOrder()))
+            .limit(10)
+            .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+  }
+
+  private static void fillMap(Path filePath, Map<String, Long> wordsFrequency) {
+    try {
+      Files.lines(filePath)
+              .flatMap(line -> Stream.of(line.split("[^a-zA-Z0-9]")))
+              .filter(word -> word.length() > 3)
+              .collect(groupingBy(identity(), counting()))
+              .entrySet()
+              .stream()
+              .sorted(comparingByValue(reverseOrder()))
+              .limit(10)
+              .forEach(x -> wordsFrequency.merge(x.getKey(), x.getValue(), Long::sum));
+    } catch (IOException e) {
       throw new RuntimeException(e);
     }
   }
 
-  private static void testSearch() throws IOException {
-    System.out.println(naiveSearch("public"));
-  }
+  private static long naiveSearch(String query) {
+    if (searchCache.containsKey(query)) {
+      return searchCache.get(query);
+    }
 
-  private static long naiveSearch(String query) throws IOException {
-    Document document = Jsoup //
-      .connect("https://www.google.com/search?q=" + query) //
-      .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.116 Safari/537.36") //
-      .get();
+    Document document = null;
+    try {
+      document = Jsoup //
+              .connect("https://www.google.com/search?q=" + query) //
+              .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.116 Safari/537.36") //
+              .get();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
 
-    Element divResultStats = document.select("div#slim_appbar").first();
+    Element divResultStats = document.select("div#result-stats").first(); // при slim_appbar крашится при query = "annotations"
     String text = divResultStats.text();
     String resultsPart = text.substring(0, text.indexOf('('));
-    return Long.parseLong(resultsPart.replaceAll("[^0-9]", ""));
+
+    long result = Long.parseLong(resultsPart.replaceAll("[^0-9]", ""));
+
+    searchCache.put(query, result);
+
+    return result;
   }
 
+  private static void shutdownAndAwaitTermination(ExecutorService pool, List<CompletableFuture<Void>> futures) {
+    pool.shutdown();
+
+    try {
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).get(60, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      pool.shutdownNow();
+      return;
+    } catch (ExecutionException | TimeoutException e) {
+      pool.shutdownNow();
+      return;
+    }
+
+    pool.shutdownNow();
+  }
 }
