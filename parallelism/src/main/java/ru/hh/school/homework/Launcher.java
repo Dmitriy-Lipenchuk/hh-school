@@ -138,8 +138,7 @@ public class Launcher {
   }
 
   private static void shutdownAndAwaitTermination(ExecutorService pool, List<CompletableFuture<Void>> futures) {
-    pool.shutdown();
-    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).join();
     pool.shutdownNow();
   }
 }
