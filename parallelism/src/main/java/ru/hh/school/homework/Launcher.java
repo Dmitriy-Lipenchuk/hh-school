@@ -3,10 +3,7 @@ package ru.hh.school.homework;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Stream;
 
@@ -49,26 +46,35 @@ public class Launcher {
 
   private static void testCount() throws IOException {
     Path path = Path.of(System.getProperty("user.dir"), "\\parallelism\\src\\main\\java\\ru\\hh\\school\\parallelism\\");
+
+    List<CompletableFuture<Void>> fileFutures = new ArrayList<>();
+    List<CompletableFuture<Void>> searchFutures = new ArrayList<>();
+
     ExecutorService fileExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     ExecutorService searchExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
     List<Path> directories = Files.walk(path)
             .filter(Files::isDirectory)
             .toList();
 
     for (Path directory : directories) {
-      CompletableFuture.supplyAsync(() -> getTopTenWordsInDirectory(directory), fileExecutor)
+      CompletableFuture<Void> directoryFuture = CompletableFuture.supplyAsync(() -> getTopTenWordsInDirectory(directory), fileExecutor)
               .thenAccept(map -> {
                 Set<String> words = map.keySet();
                 for (String word : words) {
-                  CompletableFuture.supplyAsync(() -> naiveSearch(word), searchExecutor)
+                  CompletableFuture<Void> searchFuture = CompletableFuture.supplyAsync(() -> naiveSearch(word), searchExecutor)
                           .thenAccept(searchResult ->
                                   System.out.printf("%-100s | %-20s | %-10s\n", directory, word, searchResult));
+
+                  searchFutures.add(searchFuture);
                 }
               });
+
+      fileFutures.add(directoryFuture);
     }
 
-    shutdownAndAwaitTermination(fileExecutor);
-    shutdownAndAwaitTermination(searchExecutor);
+    shutdownAndAwaitTermination(fileExecutor, fileFutures);
+    shutdownAndAwaitTermination(searchExecutor, searchFutures);
   }
 
   private static Map<String, Long> getTopTenWordsInDirectory(Path directoryPath) {
@@ -131,15 +137,9 @@ public class Launcher {
     return result;
   }
 
-  private static void shutdownAndAwaitTermination(ExecutorService pool) {
+  private static void shutdownAndAwaitTermination(ExecutorService pool, List<CompletableFuture<Void>> futures) {
     pool.shutdown();
-    try {
-      if (!pool.awaitTermination(60, TimeUnit.SECONDS)) {
-        pool.shutdownNow();
-      }
-    } catch (InterruptedException ie) {
-      pool.shutdownNow();
-      Thread.currentThread().interrupt();
-    }
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    pool.shutdownNow();
   }
 }
